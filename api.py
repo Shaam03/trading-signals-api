@@ -73,13 +73,32 @@ def calculate_sma(prices: pd.Series, period: int = 50) -> pd.Series | None:
     return prices.rolling(window=period).mean()
 
 
+def fetch_history(symbol: str, period: str, interval: str, max_retries: int = 3) -> pd.DataFrame:
+    """
+    Fetch yfinance history with retry + exponential backoff.
+    Retries on empty results to handle transient Yahoo Finance rate limits.
+    """
+    for attempt in range(max_retries):
+        try:
+            df = yf.Ticker(symbol).history(period=period, interval=interval)
+            if not df.empty:
+                return df
+            # Empty response — wait and retry
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # 1s, 2s, 4s
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+    return pd.DataFrame()  # Return empty after all retries exhausted
+
+
 # ─────────────────────────────────────────────────────────────
 # SCANNER 1 — EMA DAILY  (Price > EMA10 > EMA20 > EMA40)
 # ─────────────────────────────────────────────────────────────
 
 def analyze_ema_daily(symbol: str) -> dict | None:
     try:
-        df = yf.Ticker(symbol).history(period="6mo", interval="1d")
+        df = fetch_history(symbol, period="6mo", interval="1d")
         if df.empty or len(df) < 41:
             return None
 
@@ -118,7 +137,7 @@ def analyze_ema_daily(symbol: str) -> dict | None:
 
 def analyze_ema_weekly(symbol: str) -> dict | None:
     try:
-        df = yf.Ticker(symbol).history(period="2y", interval="1wk")
+        df = fetch_history(symbol, period="2y", interval="1wk")
         if df.empty or len(df) < 41:
             return None
 
@@ -162,7 +181,7 @@ def _get_sma_position(symbol: str, interval: str) -> tuple:
         if interval not in periods:
             return None, None, None
 
-        df = yf.Ticker(symbol).history(period=periods[interval], interval=interval)
+        df = fetch_history(symbol, period=periods[interval], interval=interval)
         if df.empty or len(df) < 51:
             return None, None, None
 
@@ -212,10 +231,10 @@ def analyze_sma50(symbol: str) -> dict | None:
 # ─────────────────────────────────────────────────────────────
 
 SCAN_CONFIG = {
-    "ema_daily":  {"fn": analyze_ema_daily,  "delay": 0.2, "label": "EMA Daily"},
-    "ema_weekly": {"fn": analyze_ema_weekly, "delay": 0.2, "label": "EMA Weekly"},
-    "sma50":      {"fn": analyze_sma50,      "delay": 0.3, "label": "SMA50 Multi-TF"},
-}
+    "ema_daily":  {"fn": analyze_ema_daily,  "delay": 0.5, "label": "EMA Daily"},
+    "ema_weekly": {"fn": analyze_ema_weekly, "delay": 0.5, "label": "EMA Weekly"},
+    "sma50":      {"fn": analyze_sma50,      "delay": 1.0, "label": "SMA50 Multi-TF"},
+}  # Larger delays prevent Yahoo Finance rate limiting on server IPs
 
 
 def _run_scan(job_id: str, scan_type: str) -> None:
