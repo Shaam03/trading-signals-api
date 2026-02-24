@@ -1,0 +1,397 @@
+"""
+Trading Signals — FastAPI Backend
+Combines: EMA Daily + EMA Weekly + SMA50 Multi-Timeframe Scanner
+
+Endpoints:
+  GET  /                         → health check
+  GET  /api/health               → health check (JSON)
+  GET  /api/symbols              → total symbols loaded
+  GET  /api/analyze/{symbol}     → quick single-symbol analysis (all 3 scanners)
+  POST /api/scan/start           → start a background scan
+  GET  /api/scan/status/{job_id} → poll scan progress
+  GET  /api/scan/results/{job_id}→ get full results when done
+  GET  /api/jobs                 → list all jobs (history)
+"""
+
+import os
+import threading
+import time
+import uuid
+from datetime import datetime
+from typing import Literal
+
+import pandas as pd
+import yfinance as yf
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# ─────────────────────────────────────────────────────────────
+# APP SETUP
+# ─────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Trading Signals API",
+    description="EMA Daily · EMA Weekly · SMA50 Multi-Timeframe Scanner for S&P500 + Nasdaq-100 + Dow 30",
+    version="1.0.0",
+)
+
+# Allow any frontend (Lovable, React, etc.) to connect
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory job store  {job_id: {...}}
+jobs: dict = {}
+
+
+# ─────────────────────────────────────────────────────────────
+# SHARED UTILITIES
+# ─────────────────────────────────────────────────────────────
+
+def load_symbols() -> list[str]:
+    try:
+        with open("top_indices_symbols.txt", "r") as f:
+            return [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def calculate_ema(prices: pd.Series, period: int) -> pd.Series | None:
+    if len(prices) < period:
+        return None
+    return prices.ewm(span=period, adjust=False).mean()
+
+
+def calculate_sma(prices: pd.Series, period: int = 50) -> pd.Series | None:
+    if len(prices) < period:
+        return None
+    return prices.rolling(window=period).mean()
+
+
+# ─────────────────────────────────────────────────────────────
+# SCANNER 1 — EMA DAILY  (Price > EMA10 > EMA20 > EMA40)
+# ─────────────────────────────────────────────────────────────
+
+def analyze_ema_daily(symbol: str) -> dict | None:
+    try:
+        df = yf.Ticker(symbol).history(period="6mo", interval="1d")
+        if df.empty or len(df) < 41:
+            return None
+
+        df["EMA10"] = calculate_ema(df["Close"], 10)
+        df["EMA20"] = calculate_ema(df["Close"], 20)
+        df["EMA40"] = calculate_ema(df["Close"], 40)
+        df = df.dropna(subset=["EMA10", "EMA20", "EMA40"])
+        if df.empty:
+            return None
+
+        row   = df.iloc[-1]
+        price = round(float(row["Close"]), 2)
+        ema10 = round(float(row["EMA10"]), 2)
+        ema20 = round(float(row["EMA20"]), 2)
+        ema40 = round(float(row["EMA40"]), 2)
+
+        if price > ema10 > ema20 > ema40:
+            return {
+                "symbol":    symbol,
+                "signal":    "BULLISH",
+                "timeframe": "daily",
+                "price":     price,
+                "ema10":     ema10,
+                "ema20":     ema20,
+                "ema40":     ema40,
+                "condition": "Price > EMA10 > EMA20 > EMA40",
+            }
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# SCANNER 2 — EMA WEEKLY  (Price > EMA10 > EMA20 > EMA40)
+# ─────────────────────────────────────────────────────────────
+
+def analyze_ema_weekly(symbol: str) -> dict | None:
+    try:
+        df = yf.Ticker(symbol).history(period="2y", interval="1wk")
+        if df.empty or len(df) < 41:
+            return None
+
+        df["EMA10"] = calculate_ema(df["Close"], 10)
+        df["EMA20"] = calculate_ema(df["Close"], 20)
+        df["EMA40"] = calculate_ema(df["Close"], 40)
+        df = df.dropna(subset=["EMA10", "EMA20", "EMA40"])
+        if df.empty:
+            return None
+
+        row   = df.iloc[-1]
+        price = round(float(row["Close"]), 2)
+        ema10 = round(float(row["EMA10"]), 2)
+        ema20 = round(float(row["EMA20"]), 2)
+        ema40 = round(float(row["EMA40"]), 2)
+
+        if price > ema10 > ema20 > ema40:
+            return {
+                "symbol":    symbol,
+                "signal":    "BULLISH",
+                "timeframe": "weekly",
+                "price":     price,
+                "ema10":     ema10,
+                "ema20":     ema20,
+                "ema40":     ema40,
+                "condition": "Price > EMA10 > EMA20 > EMA40",
+            }
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# SCANNER 3 — SMA50  (Above SMA50 on Daily + 1HR + 15min)
+# ─────────────────────────────────────────────────────────────
+
+def _get_sma_position(symbol: str, interval: str) -> tuple:
+    """Returns (position, price, sma50) for the given interval."""
+    try:
+        periods = {"1d": "3mo", "1h": "1mo", "15m": "5d"}
+        if interval not in periods:
+            return None, None, None
+
+        df = yf.Ticker(symbol).history(period=periods[interval], interval=interval)
+        if df.empty or len(df) < 51:
+            return None, None, None
+
+        df["SMA50"] = calculate_sma(df["Close"], 50)
+        df = df.dropna(subset=["SMA50"])
+        if df.empty:
+            return None, None, None
+
+        row      = df.iloc[-1]
+        price    = round(float(row["Close"]), 2)
+        sma      = round(float(row["SMA50"]), 2)
+        position = "above" if price > sma else "below"
+        return position, price, sma
+    except Exception:
+        return None, None, None
+
+
+def analyze_sma50(symbol: str) -> dict | None:
+    try:
+        d_pos,  d_price,  d_sma  = _get_sma_position(symbol, "1d")
+        h_pos,  h_price,  h_sma  = _get_sma_position(symbol, "1h")
+        m_pos,  m_price,  m_sma  = _get_sma_position(symbol, "15m")
+
+        if None in [d_pos, h_pos, m_pos]:
+            return None
+
+        if d_pos == "above" and h_pos == "above" and m_pos == "above":
+            return {
+                "symbol":        symbol,
+                "signal":        "BULLISH",
+                "timeframe":     "daily+1h+15m",
+                "daily_price":   d_price,
+                "daily_sma50":   d_sma,
+                "hourly_price":  h_price,
+                "hourly_sma50":  h_sma,
+                "min15_price":   m_price,
+                "min15_sma50":   m_sma,
+                "condition":     "Price above SMA50 on Daily + 1HR + 15min",
+            }
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# BACKGROUND SCAN RUNNER
+# ─────────────────────────────────────────────────────────────
+
+SCAN_CONFIG = {
+    "ema_daily":  {"fn": analyze_ema_daily,  "delay": 0.2, "label": "EMA Daily"},
+    "ema_weekly": {"fn": analyze_ema_weekly, "delay": 0.2, "label": "EMA Weekly"},
+    "sma50":      {"fn": analyze_sma50,      "delay": 0.3, "label": "SMA50 Multi-TF"},
+}
+
+
+def _run_scan(job_id: str, scan_type: str) -> None:
+    symbols = load_symbols()
+    if not symbols:
+        jobs[job_id].update({"status": "failed", "error": "top_indices_symbols.txt not found"})
+        return
+
+    cfg     = SCAN_CONFIG[scan_type]
+    total   = len(symbols)
+    results = []
+
+    jobs[job_id].update({"status": "running", "total": total, "progress": 0})
+
+    for i, symbol in enumerate(symbols, 1):
+        result = cfg["fn"](symbol)
+        if result:
+            results.append(result)
+
+        jobs[job_id]["progress"] = i
+        jobs[job_id]["results"]  = results  # live update so frontend can peek
+        time.sleep(cfg["delay"])
+
+    jobs[job_id].update({
+        "status":       "completed",
+        "completed_at": datetime.now().isoformat(),
+        "results":      results,
+    })
+
+
+# ─────────────────────────────────────────────────────────────
+# REQUEST / RESPONSE MODELS
+# ─────────────────────────────────────────────────────────────
+
+class ScanRequest(BaseModel):
+    type: Literal["ema_daily", "ema_weekly", "sma50"]
+
+
+# ─────────────────────────────────────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "status":    "ok",
+        "message":   "Trading Signals API is running 🚀",
+        "timestamp": datetime.now().isoformat(),
+        "docs":      "/docs",
+    }
+
+
+@app.get("/api/health", tags=["Health"])
+def health():
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/api/symbols", tags=["Info"])
+def get_symbols():
+    symbols = load_symbols()
+    return {"count": len(symbols), "symbols": symbols}
+
+
+@app.get("/api/analyze/{symbol}", tags=["Quick Analysis"])
+def analyze_symbol(symbol: str):
+    """
+    Run all 3 scanners on a single symbol instantly.
+    Great for testing from the frontend.
+    """
+    sym = symbol.upper()
+    return {
+        "symbol":    sym,
+        "timestamp": datetime.now().isoformat(),
+        "ema_daily":  analyze_ema_daily(sym),
+        "ema_weekly": analyze_ema_weekly(sym),
+        "sma50":      analyze_sma50(sym),
+    }
+
+
+@app.post("/api/scan/start", tags=["Scan"])
+def start_scan(body: ScanRequest):
+    """
+    Start a background scan. Returns a job_id.
+    Poll /api/scan/status/{job_id} to track progress.
+    """
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id":     job_id,
+        "scan_type":  body.type,
+        "label":      SCAN_CONFIG[body.type]["label"],
+        "status":     "queued",
+        "progress":   0,
+        "total":      0,
+        "results":    [],
+        "started_at": datetime.now().isoformat(),
+        "completed_at": None,
+    }
+
+    thread = threading.Thread(target=_run_scan, args=(job_id, body.type), daemon=True)
+    thread.start()
+
+    return {
+        "job_id":    job_id,
+        "scan_type": body.type,
+        "status":    "queued",
+        "message":   f"Scan started. Poll /api/scan/status/{job_id} for live progress.",
+    }
+
+
+@app.get("/api/scan/status/{job_id}", tags=["Scan"])
+def scan_status(job_id: str):
+    """Poll this to track progress of a running scan."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    pct = round((job["progress"] / job["total"]) * 100, 1) if job["total"] else 0
+
+    return {
+        "job_id":        job_id,
+        "scan_type":     job.get("scan_type"),
+        "label":         job.get("label"),
+        "status":        job["status"],
+        "progress":      job["progress"],
+        "total":         job["total"],
+        "percent":       pct,
+        "results_so_far": len(job["results"]),
+        "started_at":    job.get("started_at"),
+        "completed_at":  job.get("completed_at"),
+    }
+
+
+@app.get("/api/scan/results/{job_id}", tags=["Scan"])
+def scan_results(job_id: str):
+    """Get the full results of a scan (available even while still running)."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    return {
+        "job_id":       job_id,
+        "scan_type":    job.get("scan_type"),
+        "label":        job.get("label"),
+        "status":       job["status"],
+        "total_scanned": job["progress"],
+        "results_count": len(job["results"]),
+        "results":      job["results"],
+        "started_at":   job.get("started_at"),
+        "completed_at": job.get("completed_at"),
+    }
+
+
+@app.get("/api/jobs", tags=["Scan"])
+def list_jobs():
+    """List all scan jobs (history for this session)."""
+    summary = []
+    for jid, job in jobs.items():
+        pct = round((job["progress"] / job["total"]) * 100, 1) if job["total"] else 0
+        summary.append({
+            "job_id":        jid,
+            "scan_type":     job.get("scan_type"),
+            "label":         job.get("label"),
+            "status":        job["status"],
+            "percent":       pct,
+            "results_count": len(job["results"]),
+            "started_at":    job.get("started_at"),
+            "completed_at":  job.get("completed_at"),
+        })
+    return {"jobs": sorted(summary, key=lambda x: x["started_at"] or "", reverse=True)}
+
+
+# ─────────────────────────────────────────────────────────────
+# RUN
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
