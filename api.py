@@ -259,6 +259,7 @@ class ScanRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/", tags=["Health"])
+@app.head("/", tags=["Health"])
 def root():
     return {
         "status":    "ok",
