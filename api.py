@@ -48,6 +48,10 @@ app.add_middleware(
 # In-memory job store  {job_id: {...}}
 jobs: dict = {}
 
+# Latest completed results per scan_type — survives individual job expiry
+# {"ema_daily": {...}, "ema_weekly": {...}, "sma50": {...}}
+latest_results: dict = {}
+
 
 # ─────────────────────────────────────────────────────────────
 # SHARED UTILITIES
@@ -258,11 +262,22 @@ def _run_scan(job_id: str, scan_type: str) -> None:
         jobs[job_id]["results"]  = results  # live update so frontend can peek
         time.sleep(cfg["delay"])
 
-    jobs[job_id].update({
-        "status":       "completed",
-        "completed_at": datetime.now().isoformat(),
-        "results":      results,
-    })
+    completed_payload = {
+        "status":        "completed",
+        "completed_at":  datetime.now().isoformat(),
+        "results":       results,
+    }
+    jobs[job_id].update(completed_payload)
+
+    # Also persist as latest for this scan type — survives job dict expiry
+    latest_results[scan_type] = {
+        "scan_type":     scan_type,
+        "label":         cfg["label"],
+        "completed_at":  completed_payload["completed_at"],
+        "total_scanned": total,
+        "results_count": len(results),
+        "results":       results,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -347,25 +362,30 @@ def start_scan(body: ScanRequest):
 
 @app.get("/api/scan/status/{job_id}", tags=["Scan"])
 def scan_status(job_id: str):
-    """Poll this to track progress of a running scan."""
+    """Poll this to track progress. When status=completed, results are included directly."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[job_id]
     pct = round((job["progress"] / job["total"]) * 100, 1) if job["total"] else 0
+    is_done = job["status"] == "completed"
 
-    return {
-        "job_id":        job_id,
-        "scan_type":     job.get("scan_type"),
-        "label":         job.get("label"),
-        "status":        job["status"],
-        "progress":      job["progress"],
-        "total":         job["total"],
-        "percent":       pct,
+    response = {
+        "job_id":         job_id,
+        "scan_type":      job.get("scan_type"),
+        "label":          job.get("label"),
+        "status":         job["status"],
+        "progress":       job["progress"],
+        "total":          job["total"],
+        "percent":        pct,
         "results_so_far": len(job["results"]),
-        "started_at":    job.get("started_at"),
-        "completed_at":  job.get("completed_at"),
+        "results_count":  len(job["results"]),
+        "started_at":     job.get("started_at"),
+        "completed_at":   job.get("completed_at"),
+        # Always include results so frontend never needs a second call
+        "results":        job["results"],
     }
+    return response
 
 
 @app.get("/api/scan/results/{job_id}", tags=["Scan"])
@@ -376,16 +396,30 @@ def scan_results(job_id: str):
 
     job = jobs[job_id]
     return {
-        "job_id":       job_id,
-        "scan_type":    job.get("scan_type"),
-        "label":        job.get("label"),
-        "status":       job["status"],
+        "job_id":        job_id,
+        "scan_type":     job.get("scan_type"),
+        "label":         job.get("label"),
+        "status":        job["status"],
         "total_scanned": job["progress"],
         "results_count": len(job["results"]),
-        "results":      job["results"],
-        "started_at":   job.get("started_at"),
-        "completed_at": job.get("completed_at"),
+        "results":       job["results"],
+        "started_at":    job.get("started_at"),
+        "completed_at":  job.get("completed_at"),
     }
+
+
+@app.get("/api/scan/latest/{scan_type}", tags=["Scan"])
+def latest_scan_results(scan_type: str):
+    """
+    Returns the most recent COMPLETED results for a scan type.
+    Use this as a fallback if job_id is lost or the instance restarted.
+    scan_type must be: ema_daily | ema_weekly | sma50
+    """
+    if scan_type not in SCAN_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown scan_type. Use: {list(SCAN_CONFIG.keys())}")
+    if scan_type not in latest_results:
+        raise HTTPException(status_code=404, detail="No completed scan found for this type yet. Run a scan first.")
+    return latest_results[scan_type]
 
 
 @app.get("/api/jobs", tags=["Scan"])
