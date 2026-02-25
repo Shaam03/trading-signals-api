@@ -97,7 +97,7 @@ def fetch_history(symbol: str, period: str, interval: str, max_retries: int = 3)
 
 
 # ─────────────────────────────────────────────────────────────
-# SCANNER 1 — EMA DAILY  (Price > EMA10 > EMA20 > EMA40)
+# SCANNER 1 — EMA DAILY  (Crossover: fresh break above EMA10)
 # ─────────────────────────────────────────────────────────────
 
 def analyze_ema_daily(symbol: str) -> dict | None:
@@ -110,16 +110,30 @@ def analyze_ema_daily(symbol: str) -> dict | None:
         df["EMA20"] = calculate_ema(df["Close"], 20)
         df["EMA40"] = calculate_ema(df["Close"], 40)
         df = df.dropna(subset=["EMA10", "EMA20", "EMA40"])
-        if df.empty:
+        if len(df) < 2:
             return None
 
+        # Today
         row   = df.iloc[-1]
         price = round(float(row["Close"]), 2)
         ema10 = round(float(row["EMA10"]), 2)
         ema20 = round(float(row["EMA20"]), 2)
         ema40 = round(float(row["EMA40"]), 2)
 
-        if price > ema10 > ema20 > ema40:
+        # Previous day
+        prev = df.iloc[-2]
+        prev_close = float(prev["Close"])
+        prev_ema10 = float(prev["EMA10"])
+
+        # 6 crossover conditions
+        c1 = price > ema10            # Close > EMA10
+        c2 = price > ema20            # Close > EMA20
+        c3 = price > ema40            # Close > EMA40
+        c4 = prev_close < prev_ema10  # Prev Close < Prev EMA10
+        c5 = ema20 > ema40            # EMA20 > EMA40
+        c6 = ema10 > ema20            # EMA10 > EMA20
+
+        if c1 and c2 and c3 and c4 and c5 and c6:
             return {
                 "symbol":    symbol,
                 "signal":    "BULLISH",
@@ -128,7 +142,7 @@ def analyze_ema_daily(symbol: str) -> dict | None:
                 "ema10":     ema10,
                 "ema20":     ema20,
                 "ema40":     ema40,
-                "condition": "Price > EMA10 > EMA20 > EMA40",
+                "condition": "Fresh crossover above EMA10 · EMAs stacked bullish",
             }
         return None
     except Exception:
@@ -136,7 +150,7 @@ def analyze_ema_daily(symbol: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────────
-# SCANNER 2 — EMA WEEKLY  (Price > EMA10 > EMA20 > EMA40)
+# SCANNER 2 — EMA WEEKLY  (Crossover: fresh break above EMA10)
 # ─────────────────────────────────────────────────────────────
 
 def analyze_ema_weekly(symbol: str) -> dict | None:
@@ -149,16 +163,30 @@ def analyze_ema_weekly(symbol: str) -> dict | None:
         df["EMA20"] = calculate_ema(df["Close"], 20)
         df["EMA40"] = calculate_ema(df["Close"], 40)
         df = df.dropna(subset=["EMA10", "EMA20", "EMA40"])
-        if df.empty:
+        if len(df) < 2:
             return None
 
+        # This week
         row   = df.iloc[-1]
         price = round(float(row["Close"]), 2)
         ema10 = round(float(row["EMA10"]), 2)
         ema20 = round(float(row["EMA20"]), 2)
         ema40 = round(float(row["EMA40"]), 2)
 
-        if price > ema10 > ema20 > ema40:
+        # Previous week
+        prev = df.iloc[-2]
+        prev_close = float(prev["Close"])
+        prev_ema10 = float(prev["EMA10"])
+
+        # 6 crossover conditions
+        c1 = price > ema10            # Close > EMA10
+        c2 = price > ema20            # Close > EMA20
+        c3 = price > ema40            # Close > EMA40
+        c4 = prev_close < prev_ema10  # Prev Close < Prev EMA10
+        c5 = ema20 > ema40            # EMA20 > EMA40
+        c6 = ema10 > ema20            # EMA10 > EMA20
+
+        if c1 and c2 and c3 and c4 and c5 and c6:
             return {
                 "symbol":    symbol,
                 "signal":    "BULLISH",
@@ -167,7 +195,7 @@ def analyze_ema_weekly(symbol: str) -> dict | None:
                 "ema10":     ema10,
                 "ema20":     ema20,
                 "ema40":     ema40,
-                "condition": "Price > EMA10 > EMA20 > EMA40",
+                "condition": "Fresh crossover above EMA10 · EMAs stacked bullish",
             }
         return None
     except Exception:

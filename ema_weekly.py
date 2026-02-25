@@ -1,9 +1,15 @@
 """
-EMA Scanner - Weekly Timeframe (10, 20, 40)
+EMA Scanner - Weekly Timeframe (10, 20, 40) — Crossover Signal
 Scans S&P 500, Nasdaq-100, and Dow Jones 30 stocks
-Checks EMA alignment on: Weekly timeframe only
-Signal when Price > EMA10 > EMA20 > EMA40 (Bullish)
-      or Price < EMA10 < EMA20 < EMA40 (Bearish)
+Checks EMA crossover on: Weekly timeframe only
+
+Signal (all 6 must be true):
+  1. Close > EMA10
+  2. Close > EMA20
+  3. Close > EMA40
+  4. Previous Close < Previous EMA10  (fresh crossover)
+  5. EMA20 > EMA40
+  6. EMA10 > EMA20
 """
 
 import yfinance as yf
@@ -33,8 +39,8 @@ def calculate_ema(prices, period):
 
 def analyze_ema_weekly(symbol):
     """
-    Analyzes a stock's EMA 10/20/40 position on the Weekly timeframe.
-    Returns dict with analysis or None if not aligned.
+    Analyzes a stock's EMA 10/20/40 crossover on the Weekly timeframe.
+    Returns dict when all 6 crossover conditions are met, else None.
     """
     try:
         ticker = yf.Ticker(symbol)
@@ -50,31 +56,41 @@ def analyze_ema_weekly(symbol):
 
         df = df.dropna(subset=['EMA10', 'EMA20', 'EMA40'])
 
-        if len(df) < 1:
+        if len(df) < 2:  # Need at least 2 rows (this week + last week)
             return None
 
-        # Get latest values
-        latest = df.iloc[-1]
-        price  = round(latest['Close'], 2)
-        ema10  = round(latest['EMA10'], 2)
-        ema20  = round(latest['EMA20'], 2)
-        ema40  = round(latest['EMA40'], 2)
+        # This week's values
+        today = df.iloc[-1]
+        price  = round(today['Close'], 2)
+        ema10  = round(today['EMA10'], 2)
+        ema20  = round(today['EMA20'], 2)
+        ema40  = round(today['EMA40'], 2)
 
-        # Bullish only: Price > EMA10 > EMA20 > EMA40
-        bullish = (price > ema10 > ema20 > ema40)
+        # Previous week's values
+        prev = df.iloc[-2]
+        prev_close = prev['Close']
+        prev_ema10 = prev['EMA10']
 
-        if bullish:
+        # All 6 crossover conditions
+        c1 = price > ema10           # Close > EMA10
+        c2 = price > ema20           # Close > EMA20
+        c3 = price > ema40           # Close > EMA40
+        c4 = prev_close < prev_ema10 # Prev Close < Prev EMA10 (fresh crossover)
+        c5 = ema20 > ema40           # EMA20 > EMA40
+        c6 = ema10 > ema20           # EMA10 > EMA20
+
+        if c1 and c2 and c3 and c4 and c5 and c6:
             return {
                 'Symbol':  symbol,
-                'Signal':  '🟢 BULLISH (Above All EMAs)',
+                'Signal':  '🟢 BULLISH (EMA Crossover)',
                 'Price':   price,
                 'EMA10':   ema10,
                 'EMA20':   ema20,
                 'EMA40':   ema40,
-                'Status':  '✅ Price > EMA10 > EMA20 > EMA40'
+                'Status':  '✅ Fresh crossover above EMA10 · EMAs stacked bullish'
             }
 
-        return None  # Not in uptrend alignment
+        return None  # Crossover conditions not met
 
     except Exception:
         return None
@@ -88,8 +104,8 @@ def scan_ema_weekly():
     print("=" * 70)
     print(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
-    print("\n📊 Logic: Find stocks in Strong Uptrend on Weekly chart")
-    print("   BULLISH = Price > EMA10 > EMA20 > EMA40")
+    print("\n📊 Logic: Fresh EMA10 crossover with bullish EMA stacking")
+    print("   Close > EMA10/20/40 + Prev Close < Prev EMA10 + EMA10>20>40")
     print("=" * 70)
 
     symbols = load_symbols()
@@ -128,7 +144,7 @@ def scan_ema_weekly():
         df_results.to_csv(output_file, index=False)
         print(f"\n✓ Results saved to: {output_file}\n")
 
-        print(f"\n🟢 BULLISH — Price > EMA10 > EMA20 > EMA40 on Weekly: {len(df_results)}")
+        print(f"\n🟢 BULLISH — Fresh EMA crossover on Weekly: {len(df_results)}")
         print("-" * 70)
         if not df_results.empty:
             print(df_results[['Symbol', 'Price', 'EMA10', 'EMA20', 'EMA40']].to_string(index=False))
@@ -136,11 +152,10 @@ def scan_ema_weekly():
             print("No stocks found")
 
         print("\n" + "=" * 70)
-        print("\n📈 EMA Explanation (Weekly):")
-        print("   EMA 10 = Fast  — short-term weekly trend")
-        print("   EMA 20 = Medium — mid-term weekly trend")
-        print("   EMA 40 = Slow  — longer-term weekly trend")
-        print("\n   Strong Uptrend: Price > EMA10 > EMA20 > EMA40")
+        print("\n📈 EMA Crossover Logic (Weekly):")
+        print("   1. Close > EMA10, EMA20, EMA40")
+        print("   2. Previous Close < Previous EMA10 (fresh breakout)")
+        print("   3. EMA10 > EMA20 > EMA40 (bullish stacking)")
         print("=" * 70)
     else:
         print("\n❌ No stocks found with all Weekly EMAs aligned.")

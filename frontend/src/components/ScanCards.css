@@ -1,0 +1,141 @@
+.scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.scan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.scan-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.scan-card-top .scan-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.scan-card-top h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.scan-desc {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.scan-condition {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* ─── PROGRESS ─── */
+.progress-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.fill-green  { background: linear-gradient(90deg, #10b981, #34d399); }
+.fill-blue   { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.fill-purple { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.scan-done {
+  padding: 8px 12px;
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--accent-green);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.scan-error {
+  padding: 8px 12px;
+  background: var(--accent-red-bg);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--accent-red);
+  font-size: 0.88rem;
+}
+
+/* ─── BUTTONS ─── */
+.btn-scan {
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: opacity 0.2s, transform 0.1s;
+  margin-top: auto;
+}
+
+.btn-scan:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.btn-scan:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-green  { background: linear-gradient(135deg, #059669, #10b981); }
+.btn-blue   { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+.btn-purple { background: linear-gradient(135deg, #7c3aed, #8b5cf6); }
+
+/* ─── CARD BORDER ACCENT ─── */
+.scan-green  { border-top: 3px solid var(--accent-green); }
+.scan-blue   { border-top: 3px solid var(--accent-blue); }
+.scan-purple { border-top: 3px solid var(--accent-purple); }
+
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
